@@ -1,0 +1,13 @@
+# Render.com blueprint: deploys the Battle Padel relay as a free web service.
+# In the Render dashboard: New → Blueprint → pick this repo → Apply.
+services:
+  - type: web
+    name: battle-padel-relay
+    runtime: node
+    plan: free
+    rootDir: relay
+    buildCommand: ""
+    startCommand: node index.mjs
+    envVars:
+      - key: ADMIN_KEY
+        generateValue: true   # random admin key; view/change it in the dashboard

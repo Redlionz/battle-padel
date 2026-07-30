@@ -1,0 +1,8 @@
+{
+  "name": "battle-padel-relay",
+  "version": "1.4.0",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node index.mjs" }
+}
