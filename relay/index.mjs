@@ -37,7 +37,10 @@ const DATA_FILE = process.env.DATA_FILE
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;   // idle rooms purged after 24h
 const QUEUE_TTL_MS = 5 * 60 * 1000;        // quick-match slots live 5 min
 const MAX_PAYLOAD = 64 * 1024;         // raised for pack publishing             // per-turn payload cap
-const RATE = { windowMs: 60 * 1000, max: 120, createMax: 15, createWindowMs: 60 * 60 * 1000 };
+/* v1.4.1: presence/aim streaming means a LIVELY match sends far more than
+   the old 120/min — and two phones on one home NAT share an IP bucket.
+   600/min absorbs two chatty players with headroom; creates stay tight. */
+const RATE = { windowMs: 60 * 1000, max: 600, createMax: 15, createWindowMs: 60 * 60 * 1000 };
 
 const rooms = new Map();   // code → room
 let boards = [];           // global leaderboard entries (capped)
