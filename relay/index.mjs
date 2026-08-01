@@ -1,4 +1,7 @@
-/* ---------- Padel Check Mate relay server v1.4 ----------
+/* ---------- Padel Check Mate relay server v1.5 ----------
+   v1.5: silent-disconnect detection (left{lost:true} after a 45s grace,
+   back{} on return), blitz flag in room meta/lobby/join, and quick-match
+   pairing that prefers the same pace.
    Zero-dependency Node server for online turn-based matches.
    Rooms are 5-char codes; two players exchange turn payloads;
    delivery is Server-Sent Events (SSE) — no websockets, no npm
@@ -40,6 +43,7 @@ const MAX_PAYLOAD = 64 * 1024;         // raised for pack publishing            
 /* v1.4.1: presence/aim streaming means a LIVELY match sends far more than
    the old 120/min — and two phones on one home NAT share an IP bucket.
    600/min absorbs two chatty players with headroom; creates stay tight. */
+const LOST_GRACE_MS = 45000;  // stream gone this long without an explicit leave -> tell the rival
 const RATE = { windowMs: 60 * 1000, max: 600, createMax: 15, createWindowMs: 60 * 60 * 1000 };
 
 const rooms = new Map();   // code → room
@@ -177,7 +181,7 @@ function makeRoom(name, opts = {}) {
   const token = crypto.randomBytes(12).toString("hex");
   rooms.set(code, {
     code, created: Date.now(), lastSeen: Date.now(), turns: [],
-    pub: !!opts.pub, qm: !!opts.qm, iq: Number(opts.iq) || null,
+    pub: !!opts.pub, qm: !!opts.qm, iq: Number(opts.iq) || null, blz: !!opts.blz,
     fmt: typeof opts.fmt === "string" ? opts.fmt.slice(0, 12) : null,
     players: [{ idx: 0, name: String(name || "Player 1").slice(0, 14), token, streams: new Set() }],
   });
@@ -221,7 +225,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/") {
-    return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.4", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
+    return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.5", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
   }
 
   if (limited(req, req.method === "POST" && (url.pathname === "/api/rooms" || url.pathname === "/api/quickmatch")))
@@ -230,9 +234,10 @@ const server = http.createServer(async (req, res) => {
   try {
     /* quick match: pair with the closest-IQ waiting stranger, else open a slot */
     if (req.method === "POST" && url.pathname === "/api/quickmatch") {
-      const { name, iq, fmt } = await readBody(req);
+      const { name, iq, fmt, blz } = await readBody(req);
       const now = Date.now();
       const myIq = Number(iq) || 1000;
+      const myBlz = !!blz;
       /* prune dead slots, then pick the nearest IQ */
       for (let i = queue.length - 1; i >= 0; i--) {
         const room = rooms.get(queue[i].code);
@@ -240,20 +245,25 @@ const server = http.createServer(async (req, res) => {
       }
       /* pair only within an IQ window that WIDENS the longer a slot waits
          (fresh: ±200; +5/s, so after a minute anyone matches anyone) */
+      /* two passes: prefer a slot at MY pace (blitz vs classic), then anyone */
       let bestI = -1, bestD = Infinity;
-      queue.forEach((slot, i) => {
-        const d = Math.abs((slot.iq || 1000) - myIq);
-        const allowed = 200 + ((now - slot.ts) / 1000) * 5;
-        if (d <= allowed && d < bestD) { bestD = d; bestI = i; }
-      });
+      for (const samePace of [true, false]) {
+        queue.forEach((slot, i) => {
+          if (samePace && !!slot.blz !== myBlz) return;
+          const d = Math.abs((slot.iq || 1000) - myIq);
+          const allowed = 200 + ((now - slot.ts) / 1000) * 5;
+          if (d <= allowed && d < bestD) { bestD = d; bestI = i; }
+        });
+        if (bestI >= 0) break;
+      }
       if (bestI >= 0) {
         const slot = queue.splice(bestI, 1)[0];
         const room = rooms.get(slot.code);
         const r = joinRoom(room, name);
-        return json(res, 200, { matched: true, code: room.code, player: 1, token: r.token, names: r.names, fmt: room.fmt || null });
+        return json(res, 200, { matched: true, code: room.code, player: 1, token: r.token, names: r.names, fmt: room.fmt || null, blz: !!room.blz });
       }
-      const r = makeRoom(name, { qm: true, iq: myIq, fmt });
-      queue.push({ code: r.code, ts: now, iq: myIq });
+      const r = makeRoom(name, { qm: true, iq: myIq, fmt, blz: myBlz });
+      queue.push({ code: r.code, ts: now, iq: myIq, blz: myBlz });
       return json(res, 200, { matched: false, code: r.code, player: 0, token: r.token });
     }
 
@@ -398,7 +408,7 @@ const server = http.createServer(async (req, res) => {
       const open = [...rooms.values()]
         .filter((r) => r.players.length === 1 && (r.pub || r.qm) && creatorLive(r))
         .sort((a, b) => b.created - a.created).slice(0, 20)
-        .map((r) => ({ code: r.code, name: r.players[0].name, iq: r.iq, qm: !!r.qm, ageMin: Math.round((now - r.created) / 60000) }));
+        .map((r) => ({ code: r.code, name: r.players[0].name, iq: r.iq, qm: !!r.qm, blz: !!r.blz, ageMin: Math.round((now - r.created) / 60000) }));
       return json(res, 200, { open });
     }
 
@@ -406,8 +416,8 @@ const server = http.createServer(async (req, res) => {
 
     /* create room (public: true → listed in the lobby) */
     if (req.method === "POST" && parts.length === 2) {
-      const { name, public: pub, iq, fmt } = await readBody(req);
-      const r = makeRoom(name, { pub, iq, fmt });
+      const { name, public: pub, iq, fmt, blz } = await readBody(req);
+      const r = makeRoom(name, { pub, iq, fmt, blz });
       return json(res, 200, { code: r.code, player: 0, token: r.token });
     }
 
@@ -421,7 +431,7 @@ const server = http.createServer(async (req, res) => {
       if (room.players.length >= 2) return json(res, 409, { error: "room full" });
       const { name } = await readBody(req);
       const r = joinRoom(room, name);
-      return json(res, 200, { player: 1, token: r.token, names: r.names, fmt: room.fmt || null });
+      return json(res, 200, { player: 1, token: r.token, names: r.names, fmt: room.fmt || null, blz: !!room.blz });
     }
 
     /* leave: abandoned single-player rooms die immediately; a room where
@@ -481,6 +491,13 @@ const server = http.createServer(async (req, res) => {
       sse(res);
       me.left = false; // reconnecting counts as coming back
       me.streams.add(res);
+      /* v1.5: back from the dead — cancel the lost verdict, tell the rival */
+      clearTimeout(me.lostTimer);
+      if (me.lostAnnounced) {
+        me.lostAnnounced = false;
+        const other = room.players.find((p) => p.idx !== me.idx);
+        if (other) emitTo(other, "back", { name: me.name });
+      }
       /* replay the last PLAYABLE turn the other side sent while we were
          offline (point results aren't playable — skip those) */
       const missed = room.turns.filter((t) => t.from !== me.idx && ["serve", "rally", "end"].includes(t.payload.stage));
@@ -488,7 +505,24 @@ const server = http.createServer(async (req, res) => {
       if (me.idx === 0 && room.players.length === 2)
         res.write(`event: joined\ndata: ${JSON.stringify({ name: room.players[1].name })}\n\n`);
       const ping = setInterval(() => { try { res.write(":ping\n\n"); } catch (e) { /* gone */ } }, 25000);
-      req.on("close", () => { clearInterval(ping); me.streams.delete(res); });
+      req.on("close", () => {
+        clearInterval(ping);
+        me.streams.delete(res);
+        /* v1.5: no explicit leave, no surviving stream — after a grace
+           window (app killed, battery died, tunnel collapsed) the rival
+           finally hears about it instead of waiting forever */
+        if (!me.left && me.streams.size === 0 && room.players.length === 2) {
+          clearTimeout(me.lostTimer);
+          me.lostTimer = setTimeout(() => {
+            const rm = rooms.get(room.code);
+            const cur = rm && rm.players.find((p) => p.idx === me.idx);
+            if (!rm || !cur || cur.left || cur.streams.size) return;
+            cur.lostAnnounced = true;
+            const other = rm.players.find((p) => p.idx !== me.idx);
+            if (other) emitTo(other, "left", { name: cur.name, lost: true });
+          }, LOST_GRACE_MS);
+        }
+      });
       return;
     }
 
@@ -529,4 +563,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`🎾 Padel Check Mate relay v1.4 listening on :${PORT}${ADMIN_KEY === "change-me" ? "  ⚠ ADMIN_KEY not set — marketplace admin uses the default key!" : ""}`));
+server.listen(PORT, () => console.log(`🎾 Padel Check Mate relay v1.5 listening on :${PORT}${ADMIN_KEY === "change-me" ? "  ⚠ ADMIN_KEY not set — marketplace admin uses the default key!" : ""}`));
