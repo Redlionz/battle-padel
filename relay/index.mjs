@@ -72,7 +72,7 @@ function scheduleSave() {
     try {
       const snap = [...rooms.values()].map((r) => ({
         code: r.code, created: r.created, lastSeen: r.lastSeen, turns: r.turns,
-        pub: r.pub, qm: r.qm, iq: r.iq, fmt: r.fmt, blz: !!r.blz,
+        pub: r.pub, qm: r.qm, iq: r.iq, fmt: r.fmt, blz: !!r.blz, lv: !!r.lv,
         players: r.players.map((p) => ({ idx: p.idx, name: p.name, token: p.token, left: !!p.left, push: p.push || null })),
       }));
       fs.writeFileSync(DATA_FILE, JSON.stringify({ v: 1, vapid: vapidKeys, rooms: snap, boards, packs: [...packLib.values()], catalog: [...catalog.values()] }));
@@ -113,6 +113,7 @@ function maybePush(room, me, other, payload) {
     code: room.code,
   }), { TTL: 3600 }).catch((e) => {
     if (e && (e.statusCode === 404 || e.statusCode === 410)) { other.push = null; scheduleSave(); }
+    else console.log("push send failed:", (e && (e.statusCode || e.message)) || e);
   });
 }
 
@@ -213,7 +214,7 @@ function makeRoom(name, opts = {}) {
   const token = crypto.randomBytes(12).toString("hex");
   rooms.set(code, {
     code, created: Date.now(), lastSeen: Date.now(), turns: [],
-    pub: !!opts.pub, qm: !!opts.qm, iq: Number(opts.iq) || null, blz: !!opts.blz,
+    pub: !!opts.pub, qm: !!opts.qm, iq: Number(opts.iq) || null, blz: !!opts.blz, lv: !!opts.lv,
     fmt: typeof opts.fmt === "string" ? opts.fmt.slice(0, 12) : null,
     players: [{ idx: 0, name: String(name || "Player 1").slice(0, 14), token, streams: new Set() }],
   });
@@ -261,7 +262,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/") {
-    return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.6", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
+    return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.6.1", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
   }
 
   if (limited(req, req.method === "POST" && (url.pathname === "/api/rooms" || url.pathname === "/api/quickmatch")))
@@ -444,7 +445,7 @@ const server = http.createServer(async (req, res) => {
       const open = [...rooms.values()]
         .filter((r) => r.players.length === 1 && (r.pub || r.qm) && creatorLive(r))
         .sort((a, b) => b.created - a.created).slice(0, 20)
-        .map((r) => ({ code: r.code, name: r.players[0].name, iq: r.iq, qm: !!r.qm, blz: !!r.blz, ageMin: Math.round((now - r.created) / 60000) }));
+        .map((r) => ({ code: r.code, name: r.players[0].name, iq: r.iq, qm: !!r.qm, blz: !!r.blz, lv: !!r.lv, ageMin: Math.round((now - r.created) / 60000) }));
       return json(res, 200, { open });
     }
 
@@ -452,8 +453,8 @@ const server = http.createServer(async (req, res) => {
 
     /* create room (public: true → listed in the lobby) */
     if (req.method === "POST" && parts.length === 2) {
-      const { name, public: pub, iq, fmt, blz } = await readBody(req);
-      const r = makeRoom(name, { pub, iq, fmt, blz });
+      const { name, public: pub, iq, fmt, blz, lv } = await readBody(req);
+      const r = makeRoom(name, { pub, iq, fmt, blz, lv });
       return json(res, 200, { code: r.code, player: 0, token: r.token });
     }
 
@@ -467,7 +468,7 @@ const server = http.createServer(async (req, res) => {
       if (room.players.length >= 2) return json(res, 409, { error: "room full" });
       const { name } = await readBody(req);
       const r = joinRoom(room, name);
-      return json(res, 200, { player: 1, token: r.token, names: r.names, fmt: room.fmt || null, blz: !!room.blz });
+      return json(res, 200, { player: 1, token: r.token, names: r.names, fmt: room.fmt || null, blz: !!room.blz, lv: !!room.lv });
     }
 
     /* leave: abandoned single-player rooms die immediately; a room where
