@@ -6,7 +6,7 @@ services:
     runtime: node
     plan: free
     rootDir: relay
-    buildCommand: ""
+    buildCommand: npm install
     startCommand: node index.mjs
     envVars:
       - key: ADMIN_KEY

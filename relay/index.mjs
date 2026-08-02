@@ -1,4 +1,8 @@
-/* ---------- Padel Check Mate relay server v1.5 ----------
+/* ---------- Padel Check Mate relay server v1.6 ----------
+   v1.6: true web push — a player with no open stream gets "your move" on
+   their phone (VAPID keys persisted, per-player subscriptions, 90s
+   throttle, dead subscriptions pruned). Optional dep: web-push; the
+   server runs fine without it (push silently disabled).
    v1.5: silent-disconnect detection (left{lost:true} after a 45s grace,
    back{} on return), blitz flag in room meta/lobby/join, and quick-match
    pairing that prefers the same pace.
@@ -53,6 +57,11 @@ const catalog = new Map(); // itemId → marketplace item (admin-managed)
 const queue = [];          // quick-match waiting rooms: {code, ts}
 const rate = new Map();    // ip → {n, t0, created, c0}
 const ADMIN_KEY = process.env.ADMIN_KEY || "change-me"; // set on deploy!
+/* v1.6: web push — optional dependency, degrade gracefully without it */
+let webpush = null;
+try { webpush = (await import("web-push")).default; }
+catch (e) { console.log("ℹ web-push not installed — push notifications disabled"); }
+let vapidKeys = null;
 
 /* ---------- persistence: best-effort JSON snapshot ---------- */
 let saveTimer = null;
@@ -63,10 +72,10 @@ function scheduleSave() {
     try {
       const snap = [...rooms.values()].map((r) => ({
         code: r.code, created: r.created, lastSeen: r.lastSeen, turns: r.turns,
-        pub: r.pub, qm: r.qm, iq: r.iq, fmt: r.fmt,
-        players: r.players.map((p) => ({ idx: p.idx, name: p.name, token: p.token, left: !!p.left })),
+        pub: r.pub, qm: r.qm, iq: r.iq, fmt: r.fmt, blz: !!r.blz,
+        players: r.players.map((p) => ({ idx: p.idx, name: p.name, token: p.token, left: !!p.left, push: p.push || null })),
       }));
-      fs.writeFileSync(DATA_FILE, JSON.stringify({ v: 1, rooms: snap, boards, packs: [...packLib.values()], catalog: [...catalog.values()] }));
+      fs.writeFileSync(DATA_FILE, JSON.stringify({ v: 1, vapid: vapidKeys, rooms: snap, boards, packs: [...packLib.values()], catalog: [...catalog.values()] }));
     } catch (e) { console.error("save failed:", e.message); }
   }, 2000);
   saveTimer.unref && saveTimer.unref();
@@ -78,11 +87,34 @@ try {
       ...r, players: r.players.map((p) => ({ ...p, streams: new Set() })),
     }));
     boards = Array.isArray(snap.boards) ? snap.boards : [];
+    vapidKeys = snap.vapid || null;
     (snap.packs || []).forEach((p) => packLib.set(p.id, p));
     (snap.catalog || []).forEach((c) => catalog.set(c.id, c));
     console.log(`↻ restored ${rooms.size} room(s) from ${DATA_FILE}`);
   }
 } catch (e) { console.error("restore failed:", e.message); }
+if (webpush) {
+  if (!vapidKeys || !vapidKeys.publicKey) { vapidKeys = webpush.generateVAPIDKeys(); scheduleSave(); }
+  webpush.setVapidDetails("mailto:battle-padel@relay.local", vapidKeys.publicKey, vapidKeys.privateKey);
+  console.log("🔔 web push armed");
+}
+
+/* v1.6: push "your move" to a player who has NO open stream — throttled,
+   playable stages only, dead subscriptions pruned on 404/410 */
+function maybePush(room, me, other, payload) {
+  if (!webpush || !other || !other.push || other.streams.size > 0) return;
+  if (!["serve", "rally", "end"].includes(payload.stage)) return;
+  const now = Date.now();
+  if (other.lastPushAt && now - other.lastPushAt < 90000) return;
+  other.lastPushAt = now;
+  webpush.sendNotification(other.push, JSON.stringify({
+    t: payload.stage === "end" ? "🏁 Match over" : "🎾 Your move!",
+    b: `${me.name} played — room ${room.code}`,
+    code: room.code,
+  }), { TTL: 3600 }).catch((e) => {
+    if (e && (e.statusCode === 404 || e.statusCode === 410)) { other.push = null; scheduleSave(); }
+  });
+}
 
 /* ---------- helpers ---------- */
 const code5 = () => {
@@ -224,8 +256,12 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  if (req.method === "GET" && url.pathname === "/api/vapid") {
+    return json(res, 200, { key: (webpush && vapidKeys && vapidKeys.publicKey) || null });
+  }
+
   if (req.method === "GET" && url.pathname === "/") {
-    return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.5", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
+    return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.6", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
   }
 
   if (limited(req, req.method === "POST" && (url.pathname === "/api/rooms" || url.pathname === "/api/quickmatch")))
@@ -464,6 +500,17 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ticket: mintTicket(me), ttl: Math.round(TICKET_TTL / 1000) });
     }
 
+    /* v1.6: store this player's push subscription (or null to clear) */
+    if (req.method === "POST" && action === "subscribe") {
+      const body = await readBody(req);
+      const me = playerByToken(room, bearerOf(req) || body.token);
+      if (!me) return json(res, 403, { error: "bad token" });
+      const sub = body.sub;
+      me.push = sub && typeof sub === "object" && typeof sub.endpoint === "string" && sub.endpoint.length < 1024 ? sub : null;
+      scheduleSave();
+      return json(res, 200, { ok: true, push: !!me.push });
+    }
+
     /* post a turn — validated, relayed to the OTHER player */
     if (req.method === "POST" && action === "turn") {
       const { token, payload } = await readBody(req);
@@ -480,6 +527,7 @@ const server = http.createServer(async (req, res) => {
       }
       const other = room.players.find((p) => p.idx !== me.idx);
       if (other) emitTo(other, "turn", payload);
+      if (other) maybePush(room, me, other, payload);
       return json(res, 200, { ok: true, delivered: !!(other && other.streams.size) });
     }
 
@@ -563,4 +611,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`🎾 Padel Check Mate relay v1.5 listening on :${PORT}${ADMIN_KEY === "change-me" ? "  ⚠ ADMIN_KEY not set — marketplace admin uses the default key!" : ""}`));
+server.listen(PORT, () => console.log(`🎾 Padel Check Mate relay v1.6 listening on :${PORT}${ADMIN_KEY === "change-me" ? "  ⚠ ADMIN_KEY not set — marketplace admin uses the default key!" : ""}`));

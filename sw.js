@@ -14,7 +14,7 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v2"; // v2: meshopt-compressed models — refetch /models/
+const VER = "padelchess-sw-v3"; // v3: push notifications ("your move" with the app closed)
 const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -69,4 +69,24 @@ self.addEventListener("fetch", (e) => {
       })
     )
   );
+});
+
+/* ---------- push (Round 56): "your move" lands with the app closed ---------- */
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { /* opaque payload */ }
+  e.waitUntil(self.registration.showNotification(d.t || "Battle Padel", {
+    body: d.b || "It's your move!",
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    tag: "bp-turn-" + (d.code || ""),   // newer pushes for the same room replace, not stack
+    data: d,
+  }));
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then((cs) => {
+    for (const c of cs) if ("focus" in c) return c.focus();
+    return clients.openWindow("./");
+  }));
 });
