@@ -55,6 +55,7 @@ let boards = [];           // global leaderboard entries (capped)
 const packLib = new Map(); // packId → published community pack
 const catalog = new Map(); // itemId → marketplace item (admin-managed)
 const queue = [];          // quick-match waiting rooms: {code, ts}
+const errLog = [];         // R76: field error reports (ring buffer, deduped)
 const rate = new Map();    // ip → {n, t0, created, c0}
 const ADMIN_KEY = process.env.ADMIN_KEY || "change-me"; // set on deploy!
 /* v1.6: web push — optional dependency, degrade gracefully without it */
@@ -259,6 +260,27 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/vapid") {
     return json(res, 200, { key: (webpush && vapidKeys && vapidKeys.publicKey) || null });
+  }
+
+  /* ---------- R76: field error telemetry ----------
+     Phones report their crashes so bugs surface before anyone notices.
+     Ring buffer of the last 120, deduped by message, 6/min/IP cap. */
+  if (req.method === "POST" && url.pathname === "/api/err") {
+    if (limited(req, true)) return json(res, 429, { error: "slow down" });
+    try {
+      const b = await readBody(req);
+      const msg = String(b.msg || "").slice(0, 300);
+      if (!msg) return json(res, 400, { error: "empty" });
+      const dup = errLog.find((e) => e.msg === msg);
+      if (dup) { dup.n++; dup.last = Date.now(); }
+      else errLog.push({ msg, stack: String(b.stack || "").slice(0, 800), kind: String(b.kind || "error").slice(0, 20),
+        v: String(b.v || "").slice(0, 24), ua: String(b.ua || "").slice(0, 120), n: 1, first: Date.now(), last: Date.now() });
+      while (errLog.length > 120) errLog.shift();
+      return json(res, 200, { ok: true });
+    } catch (e) { return json(res, 400, { error: "bad report" }); }
+  }
+  if (req.method === "GET" && url.pathname === "/api/errs") {
+    return json(res, 200, { errs: errLog.slice(-60).reverse() });
   }
 
   if (req.method === "GET" && url.pathname === "/") {
