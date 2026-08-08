@@ -48,7 +48,15 @@ const MAX_PAYLOAD = 64 * 1024;         // raised for pack publishing            
    the old 120/min — and two phones on one home NAT share an IP bucket.
    600/min absorbs two chatty players with headroom; creates stay tight. */
 const LOST_GRACE_MS = 45000;  // stream gone this long without an explicit leave -> tell the rival
-const RATE = { windowMs: 60 * 1000, max: 600, createMax: 15, createWindowMs: 60 * 60 * 1000 };
+/* v1.7: the per-IP ceiling was 600/min, written when a room was two people
+   who were rarely on the same network. Tournament night breaks that
+   assumption completely: 3-8 phones in the same building share one public
+   IP, and a live rally posts a turn per strike — so a full tournament room
+   on one WiFi exceeded the limit and started getting 429s mid-match. The
+   payloads are small and capped (MAX_PAYLOAD), and the abuse vector that
+   actually matters — room creation — has its own much tighter createMax,
+   which is unchanged. */
+const RATE = { windowMs: 60 * 1000, max: 4000, createMax: 15, createWindowMs: 60 * 60 * 1000 };
 
 const rooms = new Map();   // code → room
 let boards = [];           // global leaderboard entries (capped)
@@ -74,6 +82,10 @@ function scheduleSave() {
       const snap = [...rooms.values()].map((r) => ({
         code: r.code, created: r.created, lastSeen: r.lastSeen, turns: r.turns,
         pub: r.pub, qm: r.qm, iq: r.iq, fmt: r.fmt, blz: !!r.blz, lv: !!r.lv,
+        /* v1.7: this snapshot is an explicit field list, not a spread — a
+           tournament room that lost `max` and `tour` across a restart would
+           come back as an ordinary pair with no bracket and no way in. */
+        max: r.max || 2, tour: r.tour || null,
         players: r.players.map((p) => ({ idx: p.idx, name: p.name, token: p.token, left: !!p.left, push: p.push || null })),
       }));
       fs.writeFileSync(DATA_FILE, JSON.stringify({ v: 1, vapid: vapidKeys, rooms: snap, boards, packs: [...packLib.values()], catalog: [...catalog.values()] }));
@@ -217,6 +229,11 @@ function makeRoom(name, opts = {}) {
     code, created: Date.now(), lastSeen: Date.now(), turns: [],
     pub: !!opts.pub, qm: !!opts.qm, iq: Number(opts.iq) || null, blz: !!opts.blz, lv: !!opts.lv,
     fmt: typeof opts.fmt === "string" ? opts.fmt.slice(0, 12) : null,
+    /* v1.7: a room holds more than two only when it is a tournament room.
+       Ordinary match rooms keep the old cap by default, so nothing that
+       relied on "a room is a pair" changes behaviour. */
+    max: Math.max(2, Math.min(TOUR_MAX, Number(opts.max) || 2)),
+    tour: opts.tour || null,
     players: [{ idx: 0, name: String(name || "Player 1").slice(0, 14), token, streams: new Set() }],
   });
   scheduleSave();
@@ -225,12 +242,113 @@ function makeRoom(name, opts = {}) {
 
 function joinRoom(room, name) {
   const token = crypto.randomBytes(12).toString("hex");
-  const player = { idx: 1, name: String(name || "Player 2").slice(0, 14), token, streams: new Set() };
+  /* v1.7: seat index is the seat, not the constant 1 — a tournament room
+     seats up to TOUR_MAX. */
+  const idx = room.players.length;
+  const player = { idx, name: String(name || `Player ${idx + 1}`).slice(0, 14), token, streams: new Set() };
   room.players.push(player);
   room.lastSeen = Date.now();
   emitTo(room.players[0], "joined", { name: player.name });
+  if (room.tour) emit(room, "roster", { players: room.players.map((p) => p.name) });
   scheduleSave();
-  return { token, names: room.players.map((p) => p.name) };
+  return { token, idx, names: room.players.map((p) => p.name) };
+}
+
+/* ---------- v1.7: TOURNAMENT ROOMS ----------
+   One code, 3-8 phones. The server owns the bracket so every phone agrees
+   on it without any phone being the source of truth.
+
+   A pairing is NOT played inside the tournament room. The server spawns an
+   ordinary two-player room per pairing and hands each of the two players
+   its code and their own token privately. That is the whole trick: the live
+   rally engine, the strike contract, reconnection, the lot, are reused
+   untouched — a tournament match IS a normal live match that happened to be
+   arranged for you. */
+const TOUR_MAX = 8;
+const TOUR_MIN = 3;
+
+/* Round-robin by the circle method, so every round is a set of pairs that
+   can all be played AT THE SAME TIME — which is the point of everyone
+   having their own phone. A naive all-pairs list would put one player in
+   several simultaneous matches. */
+function rrRounds(n) {
+  const ids = [...Array(n).keys()];
+  if (ids.length % 2) ids.push(-1);            // -1 = the bye seat
+  const m = ids.length, out = [];
+  for (let r = 0; r < m - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < m / 2; i++) {
+      const a = ids[i], b = ids[m - 1 - i];
+      if (a !== -1 && b !== -1) pairs.push({ a, b, winner: null });
+    }
+    out.push(pairs);
+    ids.splice(1, 0, ids.pop());               // rotate, seat 0 fixed
+  }
+  return out;
+}
+
+function koPairs(alive) {
+  const ms = [];
+  for (let i = 0; i + 1 < alive.length; i += 2) ms.push({ a: alive[i], b: alive[i + 1], winner: null });
+  return { ms, bye: alive.length % 2 ? alive[alive.length - 1] : null };
+}
+
+/* what every phone is allowed to see: names, pairings, results. No tokens,
+   no child-room codes — those go to the two players who need them. */
+function tourPublic(room) {
+  const t = room.tour;
+  return {
+    kind: t.kind, state: t.state, round: t.round, champ: t.champ, bye: t.bye,
+    wins: t.wins, players: room.players.map((p) => p.name),
+    matches: t.matches.map((m) => ({ a: m.a, b: m.b, winner: m.winner, live: !!m.code })),
+  };
+}
+
+/* spawn a real two-player live room for each pairing of the current round
+   and tell exactly those two players about it */
+function tourSpawn(room) {
+  const t = room.tour;
+  t.matches.forEach((m, mi) => {
+    if (m.code || m.winner != null) return;
+    const pa = room.players[m.a], pb = room.players[m.b];
+    if (!pa || !pb) return;
+    const child = makeRoom(pa.name, { lv: true, fmt: "tb7" });
+    const kid = rooms.get(child.code);
+    const jb = joinRoom(kid, pb.name);
+    m.code = child.code;
+    /* each token goes ONLY to its owner — a broadcast here would hand every
+       phone in the room the credentials to play someone else's match.
+       The ROUND rides along on purpose: this event is emitted before the
+       bracket broadcast, so a client that inferred the round from its own
+       copy of the bracket would still be reading the previous one and its
+       result would come back rejected as stale. */
+    emitTo(pa, "match", { mi, round: t.round, code: child.code, token: child.token, me: 0, opp: pb.name });
+    emitTo(pb, "match", { mi, round: t.round, code: child.code, token: jb.token, me: 1, opp: pa.name });
+  });
+  scheduleSave();
+}
+
+function tourAdvance(room) {
+  const t = room.tour;
+  if (t.matches.some((m) => m.winner == null)) return false;   // round still running
+  t.matches.forEach((m) => { if (m.winner != null) t.wins[m.winner]++; });
+  if (t.kind === "rr") {
+    if (t.round >= t.plan.length) {
+      const best = Math.max(...t.wins);
+      t.champ = t.wins.indexOf(best);
+      t.state = "done";
+      return true;
+    }
+    t.matches = t.plan[t.round].map((m) => ({ ...m }));
+    t.round++;
+  } else {
+    const winners = [...t.matches.map((m) => m.winner), ...(t.bye != null ? [t.bye] : [])];
+    if (winners.length <= 1) { t.champ = winners[0] != null ? winners[0] : null; t.state = "done"; return true; }
+    const { ms, bye } = koPairs(winners);
+    t.matches = ms; t.bye = bye; t.round++;
+  }
+  tourSpawn(room);
+  return true;
 }
 
 setInterval(() => {
@@ -471,6 +589,83 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { open });
     }
 
+    /* ---------- v1.7: tournament rooms ----------
+       create / join / start / result. Everything else (the SSE stream, the
+       ticket exchange, leave, persistence) is the ordinary room machinery,
+       because a tournament room IS a room. */
+    if (parts[0] === "api" && parts[1] === "tours") {
+      if (req.method === "POST" && parts.length === 2) {
+        const { name, kind } = await readBody(req);
+        const k = kind === "rr" ? "rr" : "ko";
+        const r = makeRoom(name, { max: TOUR_MAX, tour: { kind: k, state: "lobby", round: 0, matches: [], bye: null, champ: null, wins: [], plan: null } });
+        return json(res, 200, { code: r.code, token: r.token, idx: 0, kind: k });
+      }
+      const room = rooms.get((parts[2] || "").toUpperCase());
+      if (!room || !room.tour) return json(res, 404, { error: "tournament not found" });
+      room.lastSeen = Date.now();
+      const act = parts[3];
+      const t = room.tour;
+
+      if (req.method === "GET" && !act) return json(res, 200, { tour: tourPublic(room) });
+
+      if (req.method === "POST" && act === "join") {
+        if (t.state !== "lobby") return json(res, 409, { error: "already under way" });
+        if (room.players.length >= TOUR_MAX) return json(res, 409, { error: "tournament full" });
+        const { name } = await readBody(req);
+        const r = joinRoom(room, name);
+        emit(room, "bracket", tourPublic(room));
+        return json(res, 200, { token: r.token, idx: r.idx, names: r.names, kind: t.kind });
+      }
+
+      /* only the host can call it on */
+      if (req.method === "POST" && act === "start") {
+        const { token } = await readBody(req);
+        if (!room.players[0] || room.players[0].token !== token) return json(res, 403, { error: "host only" });
+        if (t.state !== "lobby") return json(res, 409, { error: "already under way" });
+        const n = room.players.length;
+        if (n < TOUR_MIN) return json(res, 400, { error: `need at least ${TOUR_MIN} players` });
+        t.wins = new Array(n).fill(0);
+        if (t.kind === "rr") {
+          t.plan = rrRounds(n);
+          t.matches = t.plan[0].map((m) => ({ ...m }));
+          t.round = 1;
+        } else {
+          const seeds = [...Array(n).keys()].sort(() => Math.random() - 0.5);
+          const { ms, bye } = koPairs(seeds);
+          t.matches = ms; t.bye = bye; t.round = 1;
+        }
+        t.state = "running";
+        tourSpawn(room);
+        emit(room, "bracket", tourPublic(room));
+        return json(res, 200, { tour: tourPublic(room) });
+      }
+
+      /* either player of the pairing reports it; first report wins, so a
+         double report from both phones cannot double-count a win */
+      if (req.method === "POST" && act === "result") {
+        const { token, mi, winner, round } = await readBody(req);
+        const me = playerByToken(room, token);
+        if (!me) return json(res, 403, { error: "bad token" });
+        /* the round must match. Without this a result that arrives late —
+           after its round has already been settled and t.matches replaced —
+           would land on whatever pairing now sits at that index and hand a
+           win to someone who has not played yet. */
+        if (Number(round) !== t.round) return json(res, 200, { tour: tourPublic(room), stale: true });
+        const m = t.matches[mi];
+        if (!m) return json(res, 404, { error: "no such match" });
+        if (me.idx !== m.a && me.idx !== m.b) return json(res, 403, { error: "not your match" });
+        if (m.winner == null) {
+          m.winner = winner === 1 ? m.b : m.a;
+          m.code = null;
+          tourAdvance(room);
+          emit(room, "bracket", tourPublic(room));
+          scheduleSave();
+        }
+        return json(res, 200, { tour: tourPublic(room) });
+      }
+      return json(res, 404, { error: "not found" });
+    }
+
     if (parts[0] !== "api" || parts[1] !== "rooms") return json(res, 404, { error: "not found" });
 
     /* create room (public: true → listed in the lobby) */
@@ -487,7 +682,7 @@ const server = http.createServer(async (req, res) => {
 
     /* join */
     if (req.method === "POST" && action === "join") {
-      if (room.players.length >= 2) return json(res, 409, { error: "room full" });
+      if (room.players.length >= (room.max || 2)) return json(res, 409, { error: "room full" });
       const { name } = await readBody(req);
       const r = joinRoom(room, name);
       return json(res, 200, { player: 1, token: r.token, names: r.names, fmt: room.fmt || null, blz: !!room.blz, lv: !!room.lv });
