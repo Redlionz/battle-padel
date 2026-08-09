@@ -266,6 +266,46 @@ function joinRoom(room, name) {
    arranged for you. */
 const TOUR_MAX = 8;
 const TOUR_MIN = 3;
+/* v1.7.1 (R115): a pairing must not be able to hang the bracket. A side
+   with no open stream on its match room for this long forfeits — phone
+   died, app killed, wandered off to the bar. Env-tunable so the test suite
+   does not have to wait two real minutes. */
+const TOUR_FORFEIT_MS = Number(process.env.TOUR_FORFEIT_MS) || 120000;
+const TOUR_SWEEP_MS = Number(process.env.TOUR_SWEEP_MS) || 15000;
+
+/* my unfinished pairing in the CURRENT round, with my child-room seat and
+   token recovered from the child room itself (the invite carries no state
+   the rooms don't already hold — which is what makes it re-derivable).
+   This is the answer to the fire-and-forget invite: a phone that slept
+   through the SSE event asks for this instead. */
+function tourMineFor(room, me) {
+  const t = room.tour;
+  if (!t || t.state !== "running") return null;
+  for (let mi = 0; mi < t.matches.length; mi++) {
+    const m = t.matches[mi];
+    if (m.winner != null || !m.code) continue;
+    if (m.a !== me.idx && m.b !== me.idx) continue;
+    const kid = rooms.get(m.code);
+    if (!kid) continue;
+    const seat = m.a === me.idx ? 0 : 1;         // tourSpawn seats a as creator
+    const kp = kid.players[seat];
+    if (!kp) continue;
+    const opp = room.players[seat === 0 ? m.b : m.a];
+    return { mi, round: t.round, code: m.code, token: kp.token, me: seat, opp: opp ? opp.name : "?" };
+  }
+  return null;
+}
+
+/* settle a pairing from outside a played match (forfeit / abandonment).
+   winnerIdx is the ROOM player index. */
+function tourSettle(room, m, winnerIdx, why) {
+  m.winner = winnerIdx;
+  m.code = null;
+  m.why = why || null;
+  tourAdvance(room);
+  emit(room, "bracket", tourPublic(room));
+  scheduleSave();
+}
 
 /* Round-robin by the circle method, so every round is a set of pairs that
    can all be played AT THE SAME TIME — which is the point of everyone
@@ -361,6 +401,44 @@ setInterval(() => {
     }
   }
 }, 60 * 60 * 1000).unref();
+
+/* ---------- v1.7.1: the tournament absence sweeper ----------
+   R115 audit finding: nothing but a fully played match ever reported a
+   result, so one dead phone hung the bracket for everybody, forever. The
+   rule now: a side with no open stream on its MATCH room for
+   TOUR_FORFEIT_MS forfeits. Presence clears the clock, so a reconnect
+   within the window costs nothing. Both sides gone → side a is awarded it
+   deterministically ("abandoned") purely so the round can end; in a party
+   game an arbitrary-but-consistent rule beats a frozen bracket. */
+setInterval(() => {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    const t = room.tour;
+    if (!t || t.state !== "running") continue;
+    /* tourSettle can advance the round, which REPLACES t.matches — keep
+       iterating the old array after that and we would settle pairings of a
+       round that no longer exists. Bail out the moment the array changes. */
+    const ms = t.matches;
+    for (const m of ms) {
+      if (t.matches !== ms || t.state !== "running") break;
+      if (m.winner != null || !m.code) continue;
+      const kid = rooms.get(m.code);
+      if (!kid) { tourSettle(room, m, m.a, "abandoned"); continue; }   // child room expired
+      m.absent = m.absent || {};
+      [0, 1].forEach((seat) => {
+        const kp = kid.players[seat];
+        const here = kp && !kp.left && kp.streams.size > 0;
+        if (here) delete m.absent[seat];
+        else if (m.absent[seat] == null) m.absent[seat] = now;
+      });
+      const gone0 = m.absent[0] != null && now - m.absent[0] > TOUR_FORFEIT_MS;
+      const gone1 = m.absent[1] != null && now - m.absent[1] > TOUR_FORFEIT_MS;
+      if (gone0 && gone1) tourSettle(room, m, m.a, "abandoned");
+      else if (gone0) tourSettle(room, m, m.b, "forfeit");
+      else if (gone1) tourSettle(room, m, m.a, "forfeit");
+    }
+  }
+}, TOUR_SWEEP_MS).unref();
 
 /* ---------- http ---------- */
 const server = http.createServer(async (req, res) => {
@@ -608,6 +686,29 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === "GET" && !act) return json(res, 200, { tour: tourPublic(room) });
 
+      /* v1.7.1: everything a reconnecting/restarted phone needs, in one
+         authenticated call: who I am, the bracket, and my pending match
+         invite if one is waiting. Stateless on the client by design. */
+      if (req.method === "GET" && act === "me") {
+        const me = playerByToken(room, tokenOf(req, url));
+        if (!me) return json(res, 403, { error: "bad token" });
+        return json(res, 200, { idx: me.idx, kind: t.kind, tour: tourPublic(room), match: tourMineFor(room, me) });
+      }
+
+      /* v1.7.1: the CALLER concedes their current pairing. Quitting a
+         tournament match is conceding it — stated in the UI, enforced here. */
+      if (req.method === "POST" && act === "forfeit") {
+        const { token, mi, round } = await readBody(req);
+        const me = playerByToken(room, token);
+        if (!me) return json(res, 403, { error: "bad token" });
+        if (Number(round) !== t.round) return json(res, 200, { tour: tourPublic(room), stale: true });
+        const m = t.matches[mi];
+        if (!m) return json(res, 404, { error: "no such match" });
+        if (me.idx !== m.a && me.idx !== m.b) return json(res, 403, { error: "not your match" });
+        if (m.winner == null) tourSettle(room, m, me.idx === m.a ? m.b : m.a, "forfeit");
+        return json(res, 200, { tour: tourPublic(room) });
+      }
+
       if (req.method === "POST" && act === "join") {
         if (t.state !== "lobby") return json(res, 409, { error: "already under way" });
         if (room.players.length >= TOUR_MAX) return json(res, 409, { error: "tournament full" });
@@ -682,6 +783,10 @@ const server = http.createServer(async (req, res) => {
 
     /* join */
     if (req.method === "POST" && action === "join") {
+      /* v1.7.1: a tournament code typed into the ordinary join box used to
+         create a phantom seat that could deadlock the bracket. Say what it
+         is instead. */
+      if (room.tour) return json(res, 409, { error: "tournament code — join it from Tournament night" });
       if (room.players.length >= (room.max || 2)) return json(res, 409, { error: "room full" });
       const { name } = await readBody(req);
       const r = joinRoom(room, name);
@@ -733,12 +838,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && action === "turn") {
       const { token, payload } = await readBody(req);
       const me = playerByToken(room, token);
+      if (process.env.TURN_LOG) console.log(`[turn] room=${room.code} auth=${me ? me.idx + ":" + me.name : "REJECTED"} stage=${payload && payload.stage} sq=${payload && payload.sq} otherStreams=${me ? (room.players.find((p) => p.idx !== me.idx) || { streams: { size: "?" } }).streams.size : "?"}`);
       if (!me) return json(res, 403, { error: "bad token" });
       if (!payload || typeof payload !== "object" || payload.v !== 1 || typeof payload.stage !== "string")
         return json(res, 400, { error: "invalid turn payload (need v:1 and stage)" });
       /* game turns, point results and chat enter history — handshakes
-         (rematch etc.) are relay-only so match stories stay clean */
-      if (["serve", "rally", "end", "point", "chat"].includes(payload.stage)) {
+         (rematch etc.) are relay-only so match stories stay clean.
+         v1.7.1: live "strike"/"miss" stages are stored too. They were
+         relay-only, which meant a player whose stream wasn't up yet — or
+         had silently died — missed the ball FOREVER: R115 measured a
+         four-phone tournament final sitting at 0-0 for seven minutes
+         because one serve message evaporated. Stored strikes make the
+         stream-open replay (below) able to hand a reconnecting player the
+         last ball, and the client's sq guard makes re-delivery free. */
+      if (["serve", "rally", "end", "point", "chat", "strike", "miss"].includes(payload.stage)) {
         room.turns.push({ from: me.idx, at: Date.now(), payload });
         if (room.turns.length > 50) room.turns.shift();
         scheduleSave();
@@ -755,6 +868,7 @@ const server = http.createServer(async (req, res) => {
         || playerByToken(room, url.searchParams.get("token"));
       if (!me) return json(res, 403, { error: "bad token" });
       sse(res);
+      if (process.env.TURN_LOG) console.log(`[stream] room=${room.code} player=${me.idx}:${me.name} open (now ${me.streams.size + 1})`);
       me.left = false; // reconnecting counts as coming back
       me.streams.add(res);
       /* v1.5: back from the dead — cancel the lost verdict, tell the rival */
@@ -766,10 +880,20 @@ const server = http.createServer(async (req, res) => {
       }
       /* replay the last PLAYABLE turn the other side sent while we were
          offline (point results aren't playable — skip those) */
-      const missed = room.turns.filter((t) => t.from !== me.idx && ["serve", "rally", "end"].includes(t.payload.stage));
+      const missed = room.turns.filter((t) => t.from !== me.idx && ["serve", "rally", "end", "strike", "miss"].includes(t.payload.stage));
       if (missed.length) res.write(`event: turn\ndata: ${JSON.stringify(missed[missed.length - 1].payload)}\n\n`);
       if (me.idx === 0 && room.players.length === 2)
         res.write(`event: joined\ndata: ${JSON.stringify({ name: room.players[1].name })}\n\n`);
+      /* v1.7.1: a tournament stream that (re)opens gets the current bracket
+         and — privately — its owner's pending match invite. This is what
+         makes the invite safe to miss: iOS suspends the connection, the
+         EventSource reconnects on foreground, and the state it slept
+         through is simply sent again. */
+      if (room.tour) {
+        res.write(`event: bracket\ndata: ${JSON.stringify(tourPublic(room))}\n\n`);
+        const mine = tourMineFor(room, me);
+        if (mine) res.write(`event: match\ndata: ${JSON.stringify(mine)}\n\n`);
+      }
       const ping = setInterval(() => { try { res.write(":ping\n\n"); } catch (e) { /* gone */ } }, 25000);
       req.on("close", () => {
         clearInterval(ping);
