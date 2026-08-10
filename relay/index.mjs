@@ -382,7 +382,11 @@ function tourAdvance(room) {
     t.matches = t.plan[t.round].map((m) => ({ ...m }));
     t.round++;
   } else {
-    const winners = [...t.matches.map((m) => m.winner), ...(t.bye != null ? [t.bye] : [])];
+    /* the previous round's bye goes FIRST so koPairs pairs them into a real
+       match and the new bye rotates to someone else — appending the bye last
+       let the same player ride byes all the way to the final (5-player KO:
+       P5 byed round after round without ever striking a ball) */
+    const winners = [...(t.bye != null ? [t.bye] : []), ...t.matches.map((m) => m.winner)];
     if (winners.length <= 1) { t.champ = winners[0] != null ? winners[0] : null; t.state = "done"; return true; }
     const { ms, bye } = koPairs(winners);
     t.matches = ms; t.bye = bye; t.round++;
@@ -483,7 +487,10 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, service: "padel-check-mate-relay", v: "1.6.1", rooms: rooms.size, queued: queue.length, board: boards.length, packs: packLib.size, catalog: catalog.size });
   }
 
-  if (limited(req, req.method === "POST" && (url.pathname === "/api/rooms" || url.pathname === "/api/quickmatch")))
+  /* creation is the expensive verb wherever it lives — a tournament create
+     mints a room exactly like /api/rooms does (and each pairing spawns a
+     child room on top), so it counts against the same createMax budget */
+  if (limited(req, req.method === "POST" && (url.pathname === "/api/rooms" || url.pathname === "/api/quickmatch" || url.pathname === "/api/tours")))
     return json(res, 429, { error: "slow down" });
 
   try {
