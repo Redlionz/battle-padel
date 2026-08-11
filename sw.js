@@ -14,7 +14,7 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v3"; // v3: push notifications ("your move" with the app closed)
+const VER = "padelchess-sw-v4"; // v4: R119 — the mocap shot library shipped INSIDE the model files, which cache-first would otherwise never refetch
 const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
