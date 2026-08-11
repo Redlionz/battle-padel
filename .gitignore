@@ -1,0 +1,22 @@
+# ---------- Battle Padel: deploy repo ----------
+# This repo is PUBLIC (it serves GitHub Pages), so nothing with a secret in
+# it may ever be committed here.
+
+# The relay's runtime state. Holds the VAPID *private* key that signs push
+# notifications, plus room history and player names. The server writes it
+# next to itself unless DATA_FILE points elsewhere — so on a real host, set
+# DATA_FILE to a path outside the checkout.
+relay-data.json
+relay/relay-data.json
+**/relay-data.json
+
+# secrets / env
+.env
+.env.*
+*.pem
+*.key
+
+# noise
+node_modules/
+*.log
+.DS_Store
