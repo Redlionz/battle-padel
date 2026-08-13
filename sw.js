@@ -14,7 +14,10 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v5"; // v5: R120 — the ready-stance idle is also inside the model files
+const VER = "padelchess-sw-v6"; // v6: R120l — the mocap inside every model file was re-solved per skeleton
+// NOTE: the twenty character .glb files are cache-first under STABLE names,
+// so changing what is inside them is invisible to a phone unless this VER
+// changes and the old cache is dropped. Bump it on every model rebuild.
 const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
