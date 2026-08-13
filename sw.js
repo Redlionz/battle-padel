@@ -14,7 +14,7 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v6"; // v6: R120l — the mocap inside every model file was re-solved per skeleton
+const VER = "padelchess-sw-v7"; // v7: R121 — the model files carry new material settings
 // NOTE: the twenty character .glb files are cache-first under STABLE names,
 // so changing what is inside them is invisible to a phone unless this VER
 // changes and the old cache is dropped. Bump it on every model rebuild.
