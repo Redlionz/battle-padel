@@ -14,12 +14,12 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v8"; // v8: R130 — portraits are .jpg now (iOS webp decoder
-                                // spam); drop caches still holding the .webp set
+const VER = "padelchess-sw-v9"; // v9: R176 — emblem.png joins the precache so the
+                                // boot splash paints offline and on a cold start
 // NOTE: the twenty character .glb files are cache-first under STABLE names,
 // so changing what is inside them is invisible to a phone unless this VER
 // changes and the old cache is dropped. Bump it on every model rebuild.
-const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
+const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./emblem.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(

@@ -11,14 +11,42 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="apple-touch-icon" href="./icon-1024.png" />
   <link rel="icon" type="image/png" href="./icon-192.png" />
+  <link rel="preload" as="image" href="./emblem.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-  <script type="module" crossorigin src="./assets/index-DaBFngvp.js"></script>
+  <script type="module" crossorigin src="./assets/index-CLJGje68.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-4KgUwnBh.js">
   <link rel="modulepreload" crossorigin href="./assets/packs-DtmX9EMy.js">
-  <link rel="stylesheet" crossorigin href="./assets/index-Cx_8TYeT.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-Cks77xhA.css">
 </head>
 <body>
+  <!-- R176: the boot screen. #root was empty until React mounted, which on a
+       cold start is a blank near-black page for well over a second while the
+       bundle downloads and twenty GLBs begin streaming. Everything here is
+       INLINE on purpose — an external stylesheet would not have arrived yet,
+       which is the whole problem this solves. It removes itself in main.jsx
+       on first paint. -->
+  <div id="boot" aria-hidden="true">
+    <img id="boot-mark" src="./emblem.png" width="96" height="98" alt="" />
+  </div>
+  <style>
+    #boot { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
+      background: radial-gradient(120% 80% at 50% 42%, #12233a 0%, #060b16 58%, #03060d 100%);
+      transition: opacity .38s ease; }
+    #boot-mark { width: 96px; height: auto;
+      filter: drop-shadow(0 10px 30px rgba(0,0,0,.65));
+      animation: bootPulse 2.4s ease-in-out infinite; }
+    #boot.gone { opacity: 0; pointer-events: none; }
+    @keyframes bootPulse { 0%,100% { transform: scale(1); opacity: .92 }
+                           50%     { transform: scale(1.045); opacity: 1 } }
+    @media (prefers-reduced-motion: reduce) { #boot-mark { animation: none } }
+  </style>
+  <script>
+    /* failsafe: if the module never loads, the splash would pulse forever and
+       hide the failure. Before it existed the user got a blank page — equally
+       broken, but obviously so. */
+    setTimeout(function () { var b = document.getElementById("boot"); if (b) b.remove(); }, 15000);
+  </script>
   <div id="root"></div>
 </body>
 </html>
