@@ -14,12 +14,14 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v9"; // v9: R176 — emblem.png joins the precache so the
-                                // boot splash paints offline and on a cold start
+const VER = "padelchess-sw-v10"; // v10: R179 — the intro film. Bumped so phones
+                                 // drop the v9 cache and re-fetch index.html,
+                                 // which is what starts the film in the first
+                                 // place.
 // NOTE: the twenty character .glb files are cache-first under STABLE names,
 // so changing what is inside them is invisible to a phone unless this VER
 // changes and the old cache is dropped. Bump it on every model rebuild.
-const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./emblem.png"];
+const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./emblem.png", "./intro-poster.jpg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
@@ -56,6 +58,17 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
+  /* R179: MEDIA IS NOT A STATIC ASSET. A <video> fetch usually arrives as a
+     Range request, and two things go wrong if this worker treats it like a
+     .js file. Response.ok is true for 206, so cache.put() gets handed a
+     partial response and throws "Partial response is unsupported" as an
+     unhandled rejection. And a cached full 200 answered back to a Range
+     request is a thing Safari's media stack is entitled to refuse. So: range
+     requests go straight to the network, and only a complete 200 is ever
+     stored. The film is not precached either — that would download 4.6MB at
+     install AND again for the element on the very first visit. */
+  if (req.headers.get("range")) return;
+
   const sameOrigin = url.origin === self.location.origin;
   const isFont = url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com");
   if (!sameOrigin && !isFont) return;
@@ -65,9 +78,9 @@ self.addEventListener("fetch", (e) => {
     caches.match(req).then((hit) =>
       hit ||
       fetch(req).then((r) => {
-        if (r.ok || r.type === "opaque") {
+        if (r.status === 200 || r.type === "opaque") {
           const cp = r.clone();
-          caches.open(VER).then((c) => c.put(req, cp));
+          caches.open(VER).then((c) => c.put(req, cp)).catch(() => {});
         }
         return r;
       })

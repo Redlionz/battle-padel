@@ -14,7 +14,7 @@
   <link rel="preload" as="image" href="./emblem.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-  <script type="module" crossorigin src="./assets/index-eYmGvUXN.js"></script>
+  <script type="module" crossorigin src="./assets/index-B3t961uu.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-4KgUwnBh.js">
   <link rel="modulepreload" crossorigin href="./assets/packs-DtmX9EMy.js">
   <link rel="stylesheet" crossorigin href="./assets/index-CvPRbMvD.css">
@@ -24,29 +24,93 @@
        cold start is a blank near-black page for well over a second while the
        bundle downloads and twenty GLBs begin streaming. Everything here is
        INLINE on purpose — an external stylesheet would not have arrived yet,
-       which is the whole problem this solves. It removes itself in main.jsx
-       on first paint. -->
+       which is the whole problem this solves. It removes itself in main.jsx.
+
+       R179: it plays Cobus's intro film now. His call: every launch, no skip,
+       and the first launch waits for the video rather than starting without
+       it. The badge underneath is not a fallback bolted on afterwards — it is
+       what paints in the first 100ms while the film is still arriving, and it
+       is what you get if the film never arrives at all. -->
   <script>window.__bootAt = Date.now();</script>
   <div id="boot" aria-hidden="true">
     <img id="boot-mark" src="./emblem.png" width="208" height="206" alt="" />
+    <video id="boot-vid" playsinline muted preload="auto" disablepictureinpicture
+           poster="./intro-poster.jpg" aria-hidden="true" tabindex="-1"></video>
   </div>
   <style>
     #boot { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
       background: radial-gradient(120% 80% at 50% 42%, #1a3050 0%, #10233c 58%, #0a1728 100%);
       transition: opacity .42s ease; }
+    #boot > * { grid-area: 1 / 1; }
     #boot-mark { width: 208px; height: auto;
       filter: drop-shadow(0 0 14px rgba(190,208,232,.30)) drop-shadow(0 10px 30px rgba(0,0,0,.65));
-      animation: bootPulse 2.4s ease-in-out infinite; }
+      animation: bootPulse 2.4s ease-in-out infinite;
+      transition: opacity .3s ease; }
+    /* The film is 1280x720. Cropping it to fill a 9:19.5 phone would keep the
+       middle 46% of the width — no floodlights, no court, and the badge cut
+       top and bottom. So it plays as a 16:9 band, centred, and its top and
+       bottom edges are FEATHERED into the navy so it reads as a title card
+       rather than as a video in a letterbox. */
+    #boot-vid { width: 100%; height: auto; aspect-ratio: 16 / 9; -o-object-fit: cover; object-fit: cover;
+      opacity: 0; transition: opacity .35s ease; pointer-events: none;
+      -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 13%, #000 87%, transparent 100%);
+      mask-image: linear-gradient(180deg, transparent 0%, #000 13%, #000 87%, transparent 100%); }
+    #boot.playing #boot-vid { opacity: 1; }
+    #boot.playing #boot-mark { opacity: 0; }
     #boot.gone { opacity: 0; pointer-events: none; }
     @keyframes bootPulse { 0%,100% { transform: scale(1); opacity: .92 }
                            50%     { transform: scale(1.045); opacity: 1 } }
     @media (prefers-reduced-motion: reduce) { #boot-mark { animation: none } }
   </style>
   <script>
-    /* failsafe: if the module never loads, the splash would pulse forever and
-       hide the failure. Before it existed the user got a blank page — equally
-       broken, but obviously so. */
-    setTimeout(function () { var b = document.getElementById("boot"); if (b) b.remove(); }, 15000);
+    (function () {
+      var boot = document.getElementById("boot");
+      var vid = document.getElementById("boot-vid");
+      /* window.__introDone resolves when the boot screen is allowed to leave.
+         main.jsx awaits it, so the film gates the app rather than racing it. */
+      var settle;
+      window.__introDone = new Promise(function (r) { settle = r; });
+      var done = false;
+      function finish(why) {
+        if (done) return; done = true;
+        window.__introWhy = why;
+        try { vid.pause(); } catch (e) {}
+        settle();
+      }
+
+      /* Reduced motion is the one case that skips the film outright. This is
+         precisely the motion that setting exists to suppress, and honouring it
+         is not the same as adding the skip button we deliberately left out. */
+      var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (calm) { finish("reduced-motion"); }
+      else {
+        vid.src = "./intro.mp4";
+        /* TWO ceilings, not one, and the difference matters. "No skip" must
+           not mean "no escape" — a blocked autoplay, a codec the device
+           refuses, a stalled download on a train would otherwise hold the user
+           on a still frame forever. But a single cap counted from page parse
+           gets spent on the DOWNLOAD: on a slow connection the film would
+           start at 8s and be cut off mid-shot by a 14s cap.
+           So: 8s for playback to BEGIN, and once it has, the film's own run
+           time plus 3s of slack. A re-cut film needs no code change — the cap
+           is read from the media, not typed in. */
+        var cap = setTimeout(function () { finish("start-timeout"); }, 8000);
+        vid.addEventListener("ended", function () { clearTimeout(cap); finish("ended"); });
+        vid.addEventListener("error", function () { clearTimeout(cap); finish("error"); });
+        vid.addEventListener("playing", function () {
+          boot.classList.add("playing");
+          clearTimeout(cap);
+          var left = (isFinite(vid.duration) ? vid.duration - vid.currentTime : 11) * 1000 + 3000;
+          cap = setTimeout(function () { finish("run-timeout"); }, left);
+        });
+        var p = vid.play();
+        if (p && p.catch) p.catch(function () { clearTimeout(cap); finish("autoplay-blocked"); });
+      }
+
+      /* last-resort failsafe, unchanged from R176: if the module never loads at
+         all, the boot screen would sit there hiding the failure. */
+      setTimeout(function () { var b = document.getElementById("boot"); if (b) b.remove(); }, 25000);
+    })();
   </script>
   <div id="root"></div>
 </body>
