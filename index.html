@@ -11,13 +11,13 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="apple-touch-icon" href="./icon-1024.png" />
   <link rel="icon" type="image/png" href="./icon-192.png" />
-  <link rel="preload" as="image" href="./emblem.png" />
+  <link rel="preload" as="image" href="./logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-  <script type="module" crossorigin src="./assets/index-B3t961uu.js"></script>
+  <script type="module" crossorigin src="./assets/index-DnOE9TxA.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-4KgUwnBh.js">
   <link rel="modulepreload" crossorigin href="./assets/packs-DtmX9EMy.js">
-  <link rel="stylesheet" crossorigin href="./assets/index-CvPRbMvD.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-DyInOj9Q.css">
 </head>
 <body>
   <!-- R176: the boot screen. #root was empty until React mounted, which on a
@@ -33,7 +33,7 @@
        is what you get if the film never arrives at all. -->
   <script>window.__bootAt = Date.now();</script>
   <div id="boot" aria-hidden="true">
-    <img id="boot-mark" src="./emblem.png" width="208" height="206" alt="" />
+    <img id="boot-mark" src="./logo.png" width="280" height="227" alt="" />
     <video id="boot-vid" playsinline muted preload="auto" disablepictureinpicture
            poster="./intro-poster.jpg" aria-hidden="true" tabindex="-1"></video>
   </div>
@@ -42,7 +42,11 @@
       background: radial-gradient(120% 80% at 50% 42%, #1a3050 0%, #10233c 58%, #0a1728 100%);
       transition: opacity .42s ease; }
     #boot > * { grid-area: 1 / 1; }
-    #boot-mark { width: 208px; height: auto;
+    /* R180b: 280px fixed measured 91% of the screen on a 320-wide phone with
+       the glow touching both edges. The cap keeps 280 from 412 up and scales
+       below it. 280 x dpr3 = 840 device px against a 768px asset, so this is
+       also the asset's resolution ceiling. */
+    #boot-mark { width: min(280px, 68vw); height: auto;
       filter: drop-shadow(0 0 14px rgba(190,208,232,.30)) drop-shadow(0 10px 30px rgba(0,0,0,.65));
       animation: bootPulse 2.4s ease-in-out infinite;
       transition: opacity .3s ease; }

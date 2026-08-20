@@ -14,14 +14,16 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v10"; // v10: R179 — the intro film. Bumped so phones
-                                 // drop the v9 cache and re-fetch index.html,
-                                 // which is what starts the film in the first
-                                 // place.
+const VER = "padelchess-sw-v11"; // v11: R180 — the medallion is out, the shield
+                                 // is in under a NEW name (logo.png). The name
+                                 // change is what actually saves us here: this
+                                 // worker is cache-first on stable names, so
+                                 // reusing emblem.png would have kept serving
+                                 // the old mark to every phone that had it.
 // NOTE: the twenty character .glb files are cache-first under STABLE names,
 // so changing what is inside them is invisible to a phone unless this VER
 // changes and the old cache is dropped. Bump it on every model rebuild.
-const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./emblem.png", "./intro-poster.jpg"];
+const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./logo.png", "./intro-poster.jpg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
