@@ -14,7 +14,7 @@
   <link rel="preload" as="image" href="./emblem.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-  <script type="module" crossorigin src="./assets/index-CLJGje68.js"></script>
+  <script type="module" crossorigin src="./assets/index-DsrnWGsg.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-4KgUwnBh.js">
   <link rel="modulepreload" crossorigin href="./assets/packs-DtmX9EMy.js">
   <link rel="stylesheet" crossorigin href="./assets/index-Cks77xhA.css">
@@ -26,15 +26,16 @@
        INLINE on purpose — an external stylesheet would not have arrived yet,
        which is the whole problem this solves. It removes itself in main.jsx
        on first paint. -->
+  <script>window.__bootAt = Date.now();</script>
   <div id="boot" aria-hidden="true">
-    <img id="boot-mark" src="./emblem.png" width="96" height="98" alt="" />
+    <img id="boot-mark" src="./emblem.png" width="160" height="159" alt="" />
   </div>
   <style>
     #boot { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
       background: radial-gradient(120% 80% at 50% 42%, #12233a 0%, #060b16 58%, #03060d 100%);
-      transition: opacity .38s ease; }
-    #boot-mark { width: 96px; height: auto;
-      filter: drop-shadow(0 10px 30px rgba(0,0,0,.65));
+      transition: opacity .42s ease; }
+    #boot-mark { width: 160px; height: auto;
+      filter: drop-shadow(0 0 14px rgba(190,208,232,.30)) drop-shadow(0 10px 30px rgba(0,0,0,.65));
       animation: bootPulse 2.4s ease-in-out infinite; }
     #boot.gone { opacity: 0; pointer-events: none; }
     @keyframes bootPulse { 0%,100% { transform: scale(1); opacity: .92 }
