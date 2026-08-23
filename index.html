@@ -11,10 +11,10 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="apple-touch-icon" href="./icon-1024.png" />
   <link rel="icon" type="image/png" href="./icon-192.png" />
-  <link rel="preload" as="image" href="./logo.png" />
+  <link rel="preload" as="image" href="./crest.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-  <script type="module" crossorigin src="./assets/index-DVq-P2UL.js"></script>
+  <script type="module" crossorigin src="./assets/index-CbrlIWfL.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-4KgUwnBh.js">
   <link rel="modulepreload" crossorigin href="./assets/packs-DtmX9EMy.js">
   <link rel="stylesheet" crossorigin href="./assets/index-ugD0-dnJ.css">
@@ -33,32 +33,50 @@
        is what you get if the film never arrives at all. -->
   <script>window.__bootAt = Date.now();</script>
   <div id="boot" aria-hidden="true">
-    <img id="boot-mark" src="./logo.png" width="280" height="227" alt="" />
+    <img id="boot-mark" src="./crest.png" width="280" height="236" alt="" />
     <video id="boot-vid" playsinline muted preload="auto" disablepictureinpicture
-           poster="./intro-poster.jpg" aria-hidden="true" tabindex="-1"></video>
+           poster="./intro2-poster.jpg" aria-hidden="true" tabindex="-1"></video>
   </div>
   <style>
+    /* R184: the film is 720x1280 now, and its own ground is a FLAT navy that
+       measures rgb(18,33,60). The old radial gradient was built to sit behind
+       a 16:9 band; behind a full-height portrait film its bright centre would
+       show through the letterbox strips as a halo around a flat rectangle.
+       The film's own colour is the ground now, with only a slight fall-off at
+       the very edges, so the strips above and below it are invisible. */
     #boot { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
-      background: radial-gradient(120% 80% at 50% 42%, #1a3050 0%, #10233c 58%, #0a1728 100%);
+      background: radial-gradient(130% 90% at 50% 46%, #16294a 0%, #12213c 62%, #0d1a2e 100%);
       transition: opacity .42s ease; }
     #boot > * { grid-area: 1 / 1; }
     /* R180b: 280px fixed measured 91% of the screen on a 320-wide phone with
        the glow touching both edges. The cap keeps 280 from 412 up and scales
-       below it. 280 x dpr3 = 840 device px against a 768px asset, so this is
-       also the asset's resolution ceiling. */
+       below it. 280 x dpr3 = 840 device px, and the crest is authored at
+       exactly 840 wide for that reason — it is the resolution ceiling, so
+       nothing above it would ever be sampled.
+       R184: the drop-shadows were a COOL GREY halo built for a chrome
+       medallion. Under a neon crest a grey halo is the one thing that reads
+       as fake, so the near shadow becomes the tube's own blue and the far one
+       stays black to hold the mark off the ground. */
     #boot-mark { width: min(280px, 68vw); height: auto;
-      filter: drop-shadow(0 0 14px rgba(190,208,232,.30)) drop-shadow(0 10px 30px rgba(0,0,0,.65));
+      filter: drop-shadow(0 0 16px rgba(79,195,255,.42)) drop-shadow(0 10px 30px rgba(0,0,0,.65));
       animation: bootPulse 2.4s ease-in-out infinite;
       transition: opacity .3s ease; }
-    /* The film is 1280x720. Cropping it to fill a 9:19.5 phone would keep the
-       middle 46% of the width — no floodlights, no court, and the badge cut
-       top and bottom. So it plays as a 16:9 band, centred, and its top and
-       bottom edges are FEATHERED into the navy so it reads as a title card
-       rather than as a video in a letterbox. */
-    #boot-vid { width: 100%; height: auto; aspect-ratio: 16 / 9; -o-object-fit: cover; object-fit: cover;
+    /* R184: the new film is PORTRAIT — 720x1280, 9:16. The old one was
+       1280x720 and had to be played as a feathered 16:9 band because cropping
+       a landscape film to a phone would have kept the middle 46% of its
+       width. None of that applies now: 9:16 against a 9:19.5 phone is the
+       same shape, near enough, so it plays FULL BLEED.
+       `contain`, not `cover`. Cover would fill the last 18% of the height by
+       cropping 9% off the top and bottom of every frame — and the crest that
+       opens the film sits high, so the banner would be the first thing lost.
+       Contain shows the whole frame and leaves two short strips of ground,
+       which are invisible because the ground is the film's own navy. The
+       feather stays, at the very edge, to hide the one-pixel seam where a
+       compressed flat field meets a CSS flat field. */
+    #boot-vid { width: 100%; height: 100%; -o-object-fit: contain; object-fit: contain;
       opacity: 0; transition: opacity .35s ease; pointer-events: none;
-      -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 13%, #000 87%, transparent 100%);
-      mask-image: linear-gradient(180deg, transparent 0%, #000 13%, #000 87%, transparent 100%); }
+      -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 4%, #000 96%, transparent 100%);
+      mask-image: linear-gradient(180deg, transparent 0%, #000 4%, #000 96%, transparent 100%); }
     #boot.playing #boot-vid { opacity: 1; }
     #boot.playing #boot-mark { opacity: 0; }
     #boot.gone { opacity: 0; pointer-events: none; }
@@ -88,7 +106,7 @@
       var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (calm) { finish("reduced-motion"); }
       else {
-        vid.src = "./intro.mp4";
+        vid.src = "./intro2.mp4";
         /* TWO ceilings, not one, and the difference matters. "No skip" must
            not mean "no escape" — a blocked autoplay, a codec the device
            refuses, a stalled download on a train would otherwise hold the user
