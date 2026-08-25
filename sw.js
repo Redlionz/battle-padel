@@ -14,7 +14,11 @@
    The cache name is versioned and prefixed `padelchess` — main.jsx's dev
    cleanup wipes that prefix, and activate() deletes every older version. */
 
-const VER = "padelchess-sw-v12"; // v12: R184 — the neon crest (crest.png) and
+const VER = "padelchess-sw-v13"; // v13: R191c — bumped to force every cache
+                                 // that survived v197/v198 to be dropped, so
+                                 // there is no argument about which build a
+                                 // phone is running when a fix is tested.
+                                 // v12: R184 — the neon crest (crest.png) and
                                  // a PORTRAIT intro film (intro2.mp4) replace
                                  // logo.png / intro.mp4. Both renamed for the
                                  // same reason as v11: this worker is
